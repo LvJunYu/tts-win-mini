@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>JotMic</AssemblyName>
+    <Product>JotMic</Product>
+    <Title>JotMic</Title>
+    <ApplicationIcon>Assets\JotMic.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Stt.Core\Stt.Core.csproj" />
+    <ProjectReference Include="..\Stt.Infrastructure\Stt.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\JotMic.ico" />
+  </ItemGroup>
+ </Project>

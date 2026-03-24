@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.cache
+TestResults/
+artifacts/
+scratch/
+*.log
+*jotmic.settings.json
+*stt.settings.json
+src/Stt.App/stt.settings.json

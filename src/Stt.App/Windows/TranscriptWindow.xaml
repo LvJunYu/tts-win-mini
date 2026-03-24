@@ -1,0 +1,32 @@
+<Window x:Class="Stt.App.Windows.TranscriptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding WindowTitle}"
+        Icon="/Assets/JotMic.ico"
+        Width="680"
+        Height="420"
+        MinWidth="560"
+        MinHeight="320"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False"
+        ResizeMode="CanResizeWithGrip"
+        Background="#E6ECE4">
+    <Grid Margin="16">
+        <Border CornerRadius="18"
+                Background="#FFFDF7"
+                BorderBrush="#D6DECE"
+                BorderThickness="1">
+            <TextBox x:Name="TranscriptTextBox"
+                     Padding="22"
+                     Text="{Binding DisplayText, Mode=OneWay}"
+                     IsReadOnly="True"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     VerticalScrollBarVisibility="Auto"
+                     Background="#FFFDF7"
+                     BorderThickness="0"
+                     Foreground="#162018"
+                     FontSize="15" />
+        </Border>
+    </Grid>
+</Window>
