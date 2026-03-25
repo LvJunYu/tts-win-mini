@@ -12,3 +12,4 @@ brainwave/
 *whisper.settings.json
 *stt.settings.json
 src/Stt.App/*.settings.json
+RETROSPECTIVE.md

@@ -6,10 +6,9 @@ It lives in the system tray, lets you start or end recording with a hotkey or a 
 
 ## What It Does
 
-- Minimal and lightweight
-- Windows-only tray app
-- Start / End recording from a tray click or a global hotkey
-- Auto-copy the finished transcript to the clipboard
+- Minimal tray app for quick speech-to-test daily use
+- Start/End recording from a tray click or a global hotkey
+- Auto-copy to clipboard
 - Optional realtime streaming mode (faster but less stable due to limited context during streaming)
 
 
@@ -17,7 +16,7 @@ It lives in the system tray, lets you start or end recording with a hotkey or a 
 
 Download the latest release here:
 
-<https://github.com/LvJunYu/tts-win-mini/releases/latest>
+<https://github.com/LvJunYu/stt-win-mini/releases/latest>
 
 ## Install
 
