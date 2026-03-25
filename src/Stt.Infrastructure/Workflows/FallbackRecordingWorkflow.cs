@@ -4,7 +4,7 @@ using Stt.Core.Models;
 
 namespace Stt.Infrastructure.Workflows;
 
-public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider
+public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier
 {
     private readonly IRecordingWorkflow _fallbackWorkflow;
     private readonly IRecordingWorkflow _primaryWorkflow;
@@ -21,14 +21,31 @@ public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWo
 
         _primaryWorkflow.TranscriptUpdated += OnTranscriptUpdated;
         _fallbackWorkflow.TranscriptUpdated += OnTranscriptUpdated;
+
+        if (_primaryWorkflow is IRecordingWorkflowStartupNotifier primaryStartupNotifier)
+        {
+            primaryStartupNotifier.RecordingStarted += OnRecordingStarted;
+        }
+
+        if (_fallbackWorkflow is IRecordingWorkflowStartupNotifier fallbackStartupNotifier)
+        {
+            fallbackStartupNotifier.RecordingStarted += OnRecordingStarted;
+        }
     }
 
     public event EventHandler<TranscriptUpdatedEventArgs>? TranscriptUpdated;
+    public event EventHandler? RecordingStarted;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
+            lock (_syncRoot)
+            {
+                _activeWorkflow = _primaryWorkflow;
+                _activeMode = ResolveWorkflowMode(_primaryWorkflow);
+            }
+
             await _primaryWorkflow.StartAsync(cancellationToken).ConfigureAwait(false);
 
             lock (_syncRoot)
@@ -49,6 +66,12 @@ public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWo
 
             try
             {
+                lock (_syncRoot)
+                {
+                    _activeWorkflow = _fallbackWorkflow;
+                    _activeMode = RecordingWorkflowMode.UploadAfterStopFallback;
+                }
+
                 await _fallbackWorkflow.StartAsync(cancellationToken).ConfigureAwait(false);
 
                 lock (_syncRoot)
@@ -61,6 +84,12 @@ public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWo
             }
             catch
             {
+                lock (_syncRoot)
+                {
+                    _activeWorkflow = null;
+                    _activeMode = RecordingWorkflowMode.Unknown;
+                }
+
                 throw new InvalidOperationException(
                     $"Streaming transcription could not start. {primaryException.Message}",
                     primaryException);
@@ -103,6 +132,19 @@ public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWo
         }
 
         TranscriptUpdated?.Invoke(this, e);
+    }
+
+    private void OnRecordingStarted(object? sender, EventArgs e)
+    {
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(sender, _activeWorkflow))
+            {
+                return;
+            }
+        }
+
+        RecordingStarted?.Invoke(this, EventArgs.Empty);
     }
 
     public RecordingWorkflowMode GetCurrentMode()

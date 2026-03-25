@@ -59,10 +59,17 @@
   capture the microphone at `16 kHz` mono
   resample to `24 kHz` PCM16
   then send the resampled audio to the realtime client
-- Do not capture the microphone directly at `24 kHz` or `48 kHz` unless you re-test transcript quality carefully. On this app, direct higher-rate capture produced worse streaming transcripts than the `16 kHz -> 24 kHz` path.
+- Realtime startup is microphone-first:
+  open the mic first
+  switch the UI to recording when the mic is actually live
+  finish the realtime connection in the background
+- Do not switch realtime capture back to direct `24 kHz` or `48 kHz` without re-testing transcript quality carefully.
+- Realtime mode is faster, but transcript quality is still less stable than non-streaming mode.
 
 ## Build
 - From the repo root:
   `dotnet build STT.sln`
 - Run locally:
   `dotnet run --project .\\src\\Stt.App\\Stt.App.csproj`
+- Refresh the repo-owned local app on this machine:
+  `powershell -ExecutionPolicy Bypass -File .\\scripts\\update-local-app.ps1`

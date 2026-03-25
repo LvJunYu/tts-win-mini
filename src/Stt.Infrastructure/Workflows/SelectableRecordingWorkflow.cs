@@ -4,7 +4,7 @@ using Stt.Core.Models;
 
 namespace Stt.Infrastructure.Workflows;
 
-public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider
+public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier
 {
     private readonly IRecordingWorkflow _nonStreamingWorkflow;
     private readonly Func<bool> _streamingEnabledAccessor;
@@ -23,9 +23,20 @@ public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecording
 
         _streamingWorkflow.TranscriptUpdated += OnTranscriptUpdated;
         _nonStreamingWorkflow.TranscriptUpdated += OnTranscriptUpdated;
+
+        if (_streamingWorkflow is IRecordingWorkflowStartupNotifier streamingStartupNotifier)
+        {
+            streamingStartupNotifier.RecordingStarted += OnRecordingStarted;
+        }
+
+        if (_nonStreamingWorkflow is IRecordingWorkflowStartupNotifier nonStreamingStartupNotifier)
+        {
+            nonStreamingStartupNotifier.RecordingStarted += OnRecordingStarted;
+        }
     }
 
     public event EventHandler<TranscriptUpdatedEventArgs>? TranscriptUpdated;
+    public event EventHandler? RecordingStarted;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -40,11 +51,23 @@ public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecording
                 ? "Streaming mode requested for this session."
                 : "Upload-after-stop mode requested for this session.");
 
-        await selectedWorkflow.StartAsync(cancellationToken).ConfigureAwait(false);
-
         lock (_syncRoot)
         {
             _activeWorkflow = selectedWorkflow;
+        }
+
+        try
+        {
+            await selectedWorkflow.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (_syncRoot)
+            {
+                _activeWorkflow = null;
+            }
+
+            throw;
         }
     }
 
@@ -82,6 +105,19 @@ public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecording
         }
 
         TranscriptUpdated?.Invoke(this, e);
+    }
+
+    private void OnRecordingStarted(object? sender, EventArgs e)
+    {
+        lock (_syncRoot)
+        {
+            if (!ReferenceEquals(sender, _activeWorkflow))
+            {
+                return;
+            }
+        }
+
+        RecordingStarted?.Invoke(this, EventArgs.Empty);
     }
 
     public RecordingWorkflowMode GetCurrentMode()

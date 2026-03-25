@@ -5,7 +5,7 @@ using Stt.Core.Models;
 
 namespace Stt.Infrastructure.Workflows;
 
-public sealed class OpenAiRealtimeRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider
+public sealed class OpenAiRealtimeRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier
 {
     private readonly IStreamingAudioCaptureSession _audioCaptureSession;
     private readonly IRealtimeTranscriptionClient _realtimeTranscriptionClient;
@@ -25,12 +25,13 @@ public sealed class OpenAiRealtimeRecordingWorkflow : IRecordingWorkflow, IRecor
     }
 
     public event EventHandler<TranscriptUpdatedEventArgs>? TranscriptUpdated;
+    public event EventHandler? RecordingStarted;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         WhisperTrace.Log(
             "RealtimeWorkflow",
-            "Starting realtime recording session with server-managed turn detection.");
+            "Starting realtime recording session. Opening microphone first, then connecting the realtime session.");
 
         lock (_syncRoot)
         {
@@ -42,37 +43,69 @@ public sealed class OpenAiRealtimeRecordingWorkflow : IRecordingWorkflow, IRecor
             _realtimeTranscriptionClient.ValidateConfiguration();
         }
 
-        var transcriptionSession = await _realtimeTranscriptionClient
-            .CreateSessionAsync(cancellationToken)
-            .ConfigureAwait(false);
-
         var audioChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false
         });
 
+        IRealtimeTranscriptionSession? transcriptionSession = null;
+        var microphoneStarted = false;
+
         lock (_syncRoot)
         {
             _audioChannel = audioChannel;
-            _audioPumpTask = PumpAudioAsync(audioChannel.Reader, transcriptionSession, cancellationToken);
-            _transcriptionSession = transcriptionSession;
+            _audioPumpTask = null;
+            _transcriptionSession = null;
             _totalCapturedBytes = 0;
             _isRecording = true;
         }
 
-        transcriptionSession.TranscriptUpdated += OnTranscriptUpdated;
         _audioCaptureSession.AudioChunkCaptured += OnAudioChunkCaptured;
 
         try
         {
             await _audioCaptureSession.StartAsync(cancellationToken).ConfigureAwait(false);
-            WhisperTrace.Log("RealtimeWorkflow", "Microphone capture started for realtime session.");
+            microphoneStarted = true;
+            RecordingStarted?.Invoke(this, EventArgs.Empty);
+
+            WhisperTrace.Log(
+                "RealtimeWorkflow",
+                "Microphone capture started before realtime session connection completed.");
+
+            transcriptionSession = await _realtimeTranscriptionClient
+                .CreateSessionAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            transcriptionSession.TranscriptUpdated += OnTranscriptUpdated;
+
+            lock (_syncRoot)
+            {
+                _audioPumpTask = PumpAudioAsync(audioChannel.Reader, transcriptionSession, cancellationToken);
+                _transcriptionSession = transcriptionSession;
+            }
+
+            WhisperTrace.Log(
+                "RealtimeWorkflow",
+                "Realtime session connected. Streaming buffered microphone audio to OpenAI.");
         }
         catch
         {
-            audioChannel.Writer.TryComplete();
             _audioCaptureSession.AudioChunkCaptured -= OnAudioChunkCaptured;
+
+            if (microphoneStarted)
+            {
+                try
+                {
+                    await _audioCaptureSession.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best effort cleanup when startup fails after the microphone is already active.
+                }
+            }
+
+            audioChannel.Writer.TryComplete();
 
             if (_audioPumpTask is not null)
             {
@@ -86,8 +119,11 @@ public sealed class OpenAiRealtimeRecordingWorkflow : IRecordingWorkflow, IRecor
                 }
             }
 
-            transcriptionSession.TranscriptUpdated -= OnTranscriptUpdated;
-            await transcriptionSession.DisposeAsync().ConfigureAwait(false);
+            if (transcriptionSession is not null)
+            {
+                transcriptionSession.TranscriptUpdated -= OnTranscriptUpdated;
+                await transcriptionSession.DisposeAsync().ConfigureAwait(false);
+            }
 
             lock (_syncRoot)
             {
@@ -98,7 +134,9 @@ public sealed class OpenAiRealtimeRecordingWorkflow : IRecordingWorkflow, IRecor
                 _isRecording = false;
             }
 
-            WhisperTrace.Log("RealtimeWorkflow", "Realtime session startup failed during microphone initialization.");
+            WhisperTrace.Log(
+                "RealtimeWorkflow",
+                "Realtime session startup failed after microphone-first startup path.");
             throw;
         }
     }

@@ -11,6 +11,7 @@ public sealed class AppController
     private readonly object _snapshotSync = new();
     private readonly IRecordingWorkflow _recordingWorkflow;
     private readonly IRecordingWorkflowModeProvider? _recordingWorkflowModeProvider;
+    private readonly IRecordingWorkflowStartupNotifier? _recordingWorkflowStartupNotifier;
     private readonly Func<bool> _streamingEnabledAccessor;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private AppSnapshot _snapshot;
@@ -29,10 +30,12 @@ public sealed class AppController
     {
         _recordingWorkflow = recordingWorkflow;
         _recordingWorkflowModeProvider = recordingWorkflow as IRecordingWorkflowModeProvider;
+        _recordingWorkflowStartupNotifier = recordingWorkflow as IRecordingWorkflowStartupNotifier;
         _clipboardService = clipboardService;
         _streamingEnabledAccessor = streamingEnabledAccessor ?? (() => true);
         _snapshot = initialSnapshot ?? AppSnapshot.Idle;
         _recordingWorkflow.TranscriptUpdated += OnTranscriptUpdated;
+        _recordingWorkflowStartupNotifier?.RecordingStarted += OnRecordingStarted;
     }
 
     public event EventHandler<AppSnapshot>? SnapshotChanged;
@@ -78,7 +81,7 @@ public sealed class AppController
     {
         SetSnapshot(new AppSnapshot(
             AppSessionState.Starting,
-            "Connecting to OpenAI and opening the microphone.",
+            "Opening the microphone and connecting to OpenAI.",
             string.Empty));
 
         try
@@ -95,6 +98,33 @@ public sealed class AppController
         {
             ResetActiveWorkflowMode();
             ShowFailure(ex.Message);
+        }
+    }
+
+    private void OnRecordingStarted(object? sender, EventArgs e)
+    {
+        AppSnapshot? snapshotToPublish = null;
+
+        lock (_snapshotSync)
+        {
+            if (_snapshot.State != AppSessionState.Starting)
+            {
+                return;
+            }
+
+            _snapshot = new AppSnapshot(
+                AppSessionState.Recording,
+                _streamingEnabledAccessor()
+                    ? "Recording. Connecting realtime streaming in the background."
+                    : BuildRecordingStatusMessage(),
+                _snapshot.TranscriptText);
+
+            snapshotToPublish = _snapshot;
+        }
+
+        if (snapshotToPublish is not null)
+        {
+            SnapshotChanged?.Invoke(this, snapshotToPublish);
         }
     }
 
