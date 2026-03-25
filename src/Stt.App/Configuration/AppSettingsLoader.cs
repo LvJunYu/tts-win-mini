@@ -7,8 +7,6 @@ namespace Stt.App.Configuration;
 public sealed record AppSettings(
     string OpenAiApiKey,
     string SelectedMicrophoneDeviceId,
-    string UploadAfterStopTranscriptionModel,
-    string RealtimeTranscriptionModel,
     bool EnableStreamingTranscription,
     bool ShowLiveTranscriptWhileStreaming,
     string ToggleRecordingHotkey,
@@ -62,18 +60,6 @@ public static class AppSettingsLoader
                     payload?.SelectedMicrophoneDeviceId,
                     Environment.GetEnvironmentVariable("WHISPER_SELECTED_MICROPHONE_DEVICE_ID"))
                 ?? string.Empty,
-            UploadAfterStopTranscriptionModel: AppDefaults.NormalizeUploadAfterStopTranscriptionModel(
-                FirstNonEmpty(
-                    payload?.UploadAfterStopTranscriptionModel,
-                    payload?.TranscriptionModel,
-                    Environment.GetEnvironmentVariable("WHISPER_UPLOAD_AFTER_STOP_TRANSCRIPTION_MODEL"),
-                    Environment.GetEnvironmentVariable("WHISPER_TRANSCRIPTION_MODEL"))),
-            RealtimeTranscriptionModel: AppDefaults.NormalizeRealtimeTranscriptionModel(
-                FirstNonEmpty(
-                    payload?.RealtimeTranscriptionModel,
-                    payload?.TranscriptionModel,
-                    Environment.GetEnvironmentVariable("WHISPER_REALTIME_TRANSCRIPTION_MODEL"),
-                    Environment.GetEnvironmentVariable("WHISPER_TRANSCRIPTION_MODEL"))),
             EnableStreamingTranscription: FirstNonNull(
                     payload?.EnableStreamingTranscription,
                     ParseBoolean(Environment.GetEnvironmentVariable("WHISPER_ENABLE_STREAMING_TRANSCRIPTION")))
@@ -113,8 +99,6 @@ public static class AppSettingsLoader
         var payload = new SettingsFilePayload(
             settings.OpenAiApiKey,
             settings.SelectedMicrophoneDeviceId,
-            settings.UploadAfterStopTranscriptionModel,
-            settings.RealtimeTranscriptionModel,
             settings.EnableStreamingTranscription,
             settings.ShowLiveTranscriptWhileStreaming,
             settings.ToggleRecordingHotkey,
@@ -200,12 +184,9 @@ public static class AppSettingsLoader
     private sealed record SettingsFilePayload(
         string? OpenAiApiKey,
         string? SelectedMicrophoneDeviceId,
-        string? UploadAfterStopTranscriptionModel,
-        string? RealtimeTranscriptionModel,
         bool? EnableStreamingTranscription,
         bool? ShowLiveTranscriptWhileStreaming,
         string? ToggleRecordingHotkey,
         bool? ShowTranscriptWindowOnCompletion,
-        bool? LaunchOnWindowsLogin,
-        string? TranscriptionModel = null);
+        bool? LaunchOnWindowsLogin);
 }

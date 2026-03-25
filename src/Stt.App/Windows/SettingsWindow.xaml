@@ -4,9 +4,9 @@
         Title="whisper Settings"
         Icon="/Assets/whisper.ico"
         Width="560"
-        Height="400"
+        Height="340"
         MinWidth="460"
-        MinHeight="300"
+        MinHeight="280"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="False"
         ResizeMode="CanResizeWithGrip"
@@ -128,57 +128,6 @@
                                       Foreground="#203126"
                                       Content="Launch on Windows login" />
                         </StackPanel>
-
-                        <StackPanel Margin="0,18,0,0">
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding EnableStreamingTranscription}" Value="True">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </StackPanel.Style>
-                            <TextBlock Text="Non-streaming model"
-                                       Foreground="#33453A"
-                                       FontWeight="SemiBold" />
-                            <ComboBox Margin="0,8,0,0"
-                                      Padding="10,6"
-                                      ItemsSource="{Binding AvailableUploadAfterStopTranscriptionModels}"
-                                      DisplayMemberPath="DisplayName"
-                                      SelectedValuePath="Value"
-                                      SelectedValue="{Binding UploadAfterStopTranscriptionModel, UpdateSourceTrigger=PropertyChanged}"
-                                      Background="#FFFDF7"
-                                      BorderBrush="#CCD7C5"
-                                      Foreground="#162018" />
-                        </StackPanel>
-
-                        <StackPanel Margin="0,18,0,0">
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding EnableStreamingTranscription}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </StackPanel.Style>
-                            <TextBlock Text="Streaming model"
-                                       Foreground="#33453A"
-                                       FontWeight="SemiBold" />
-                            <ComboBox Margin="0,8,0,0"
-                                      Padding="10,6"
-                                      ItemsSource="{Binding AvailableRealtimeTranscriptionModels}"
-                                      DisplayMemberPath="DisplayName"
-                                      SelectedValuePath="Value"
-                                      SelectedValue="{Binding RealtimeTranscriptionModel, UpdateSourceTrigger=PropertyChanged}"
-                                      Background="#FFFDF7"
-                                      BorderBrush="#CCD7C5"
-                                      Foreground="#162018" />
-                        </StackPanel>
-
                         <Border Margin="0,18,0,0"
                                 Padding="14"
                                 CornerRadius="14"

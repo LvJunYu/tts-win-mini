@@ -8,34 +8,22 @@ namespace Stt.App.ViewModels;
 public sealed class SettingsViewModel : ObservableObject
 {
     private IReadOnlyList<MicrophoneDeviceOption> _availableMicrophones;
-    private IReadOnlyList<TranscriptionModelOption> _availableRealtimeTranscriptionModels;
-    private IReadOnlyList<TranscriptionModelOption> _availableUploadAfterStopTranscriptionModels;
     private bool _enableStreamingTranscription;
     private bool _launchOnWindowsLogin;
     private string _openAiApiKey;
-    private string _realtimeTranscriptionModel;
     private string _selectedMicrophoneDeviceId;
     private bool _showLiveTranscriptWhileStreaming;
     private bool _showTranscriptWindowOnCompletion;
     private string _toggleRecordingHotkey;
-    private string _uploadAfterStopTranscriptionModel;
 
     public SettingsViewModel(
         AppSettings settings,
         string settingsPath,
-        IReadOnlyList<MicrophoneDeviceOption> availableMicrophones,
-        IReadOnlyList<TranscriptionModelOption> availableUploadAfterStopTranscriptionModels,
-        IReadOnlyList<TranscriptionModelOption> availableRealtimeTranscriptionModels)
+        IReadOnlyList<MicrophoneDeviceOption> availableMicrophones)
     {
         _availableMicrophones = availableMicrophones;
-        _availableUploadAfterStopTranscriptionModels = availableUploadAfterStopTranscriptionModels;
-        _availableRealtimeTranscriptionModels = availableRealtimeTranscriptionModels;
         _openAiApiKey = settings.OpenAiApiKey;
         _selectedMicrophoneDeviceId = settings.SelectedMicrophoneDeviceId;
-        _uploadAfterStopTranscriptionModel = AppDefaults.NormalizeUploadAfterStopTranscriptionModel(
-            settings.UploadAfterStopTranscriptionModel);
-        _realtimeTranscriptionModel = AppDefaults.NormalizeRealtimeTranscriptionModel(
-            settings.RealtimeTranscriptionModel);
         _enableStreamingTranscription = settings.EnableStreamingTranscription;
         _showLiveTranscriptWhileStreaming = settings.ShowLiveTranscriptWhileStreaming;
         _toggleRecordingHotkey = settings.ToggleRecordingHotkey;
@@ -53,18 +41,6 @@ public sealed class SettingsViewModel : ObservableObject
     {
         get => _openAiApiKey;
         set => SetProperty(ref _openAiApiKey, value);
-    }
-
-    public IReadOnlyList<TranscriptionModelOption> AvailableUploadAfterStopTranscriptionModels
-    {
-        get => _availableUploadAfterStopTranscriptionModels;
-        private set => SetProperty(ref _availableUploadAfterStopTranscriptionModels, value);
-    }
-
-    public IReadOnlyList<TranscriptionModelOption> AvailableRealtimeTranscriptionModels
-    {
-        get => _availableRealtimeTranscriptionModels;
-        private set => SetProperty(ref _availableRealtimeTranscriptionModels, value);
     }
 
     public bool LaunchOnWindowsLogin
@@ -108,22 +84,6 @@ public sealed class SettingsViewModel : ObservableObject
         set => SetProperty(ref _selectedMicrophoneDeviceId, value);
     }
 
-    public string UploadAfterStopTranscriptionModel
-    {
-        get => _uploadAfterStopTranscriptionModel;
-        set => SetProperty(
-            ref _uploadAfterStopTranscriptionModel,
-            AppDefaults.NormalizeUploadAfterStopTranscriptionModel(value));
-    }
-
-    public string RealtimeTranscriptionModel
-    {
-        get => _realtimeTranscriptionModel;
-        set => SetProperty(
-            ref _realtimeTranscriptionModel,
-            AppDefaults.NormalizeRealtimeTranscriptionModel(value));
-    }
-
     public string ToggleRecordingHotkey
     {
         get => _toggleRecordingHotkey;
@@ -157,8 +117,6 @@ public sealed class SettingsViewModel : ObservableObject
         SelectedMicrophoneDeviceId = AvailableMicrophones.Any(option => option.DeviceId == settings.SelectedMicrophoneDeviceId)
             ? settings.SelectedMicrophoneDeviceId
             : AvailableMicrophones.FirstOrDefault()?.DeviceId ?? string.Empty;
-        UploadAfterStopTranscriptionModel = settings.UploadAfterStopTranscriptionModel;
-        RealtimeTranscriptionModel = settings.RealtimeTranscriptionModel;
         EnableStreamingTranscription = settings.EnableStreamingTranscription;
         ShowLiveTranscriptWhileStreaming = settings.ShowLiveTranscriptWhileStreaming && settings.EnableStreamingTranscription;
         ToggleRecordingHotkey = settings.ToggleRecordingHotkey;
@@ -171,8 +129,6 @@ public sealed class SettingsViewModel : ObservableObject
         SaveRequested?.Invoke(this, new AppSettingsSaveRequestedEventArgs(new AppSettings(
             OpenAiApiKey: OpenAiApiKey.Trim(),
             SelectedMicrophoneDeviceId: SelectedMicrophoneDeviceId.Trim(),
-            UploadAfterStopTranscriptionModel: UploadAfterStopTranscriptionModel,
-            RealtimeTranscriptionModel: RealtimeTranscriptionModel,
             EnableStreamingTranscription: EnableStreamingTranscription,
             ShowLiveTranscriptWhileStreaming: EnableStreamingTranscription && ShowLiveTranscriptWhileStreaming,
             ToggleRecordingHotkey: ToggleRecordingHotkey.Trim(),

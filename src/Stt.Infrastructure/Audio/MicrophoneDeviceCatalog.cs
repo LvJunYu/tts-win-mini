@@ -1,4 +1,5 @@
 using System.Globalization;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using Stt.Core.Models;
 
@@ -13,7 +14,7 @@ public static class MicrophoneDeviceCatalog
     {
         var devices = new List<MicrophoneDeviceOption>
         {
-            new(DefaultDeviceId, DefaultDeviceLabel)
+            new(DefaultDeviceId, BuildDefaultDeviceLabel())
         };
 
         var displayNameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +40,30 @@ public static class MicrophoneDeviceCatalog
         }
 
         return devices;
+    }
+
+    private static string BuildDefaultDeviceLabel()
+    {
+        var defaultDeviceName = TryGetDefaultCaptureDeviceName();
+        return string.IsNullOrWhiteSpace(defaultDeviceName)
+            ? DefaultDeviceLabel
+            : $"{DefaultDeviceLabel} ({defaultDeviceName})";
+    }
+
+    private static string? TryGetDefaultCaptureDeviceName()
+    {
+        try
+        {
+            var enumerator = new MMDeviceEnumerator();
+            var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
+            return string.IsNullOrWhiteSpace(device?.FriendlyName)
+                ? null
+                : device.FriendlyName.Trim();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static int? ResolveDeviceNumber(string? deviceId)

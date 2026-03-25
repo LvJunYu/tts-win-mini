@@ -5,6 +5,7 @@ using Stt.App.Controllers;
 using Stt.App.Services;
 using Stt.App.ViewModels;
 using Stt.App.Windows;
+using Stt.Core.Diagnostics;
 using Stt.Core.Models;
 using Stt.Infrastructure.Audio;
 using Stt.Infrastructure.OpenAi;
@@ -17,8 +18,6 @@ public partial class App : System.Windows.Application
     private AppSettings _currentSettings = new(
         OpenAiApiKey: string.Empty,
         SelectedMicrophoneDeviceId: string.Empty,
-        UploadAfterStopTranscriptionModel: AppDefaults.UploadAfterStopTranscriptionModel,
-        RealtimeTranscriptionModel: AppDefaults.RealtimeTranscriptionModel,
         EnableStreamingTranscription: false,
         ShowLiveTranscriptWhileStreaming: false,
         ToggleRecordingHotkey: "Ctrl+Alt+Space",
@@ -55,6 +54,10 @@ public partial class App : System.Windows.Application
         var initialSnapshot = AppSnapshot.Idle;
         _launchOnLoginService = new WindowsLaunchOnLoginService();
 
+        WhisperTrace.Log(
+            "App",
+            $"Startup. Executable={Environment.ProcessPath ?? "unknown"} LoadedSettingsPath={loadedSettings.LoadedSettingsPath ?? "none"} PreferredSettingsPath={loadedSettings.PreferredSettingsPath} StreamingEnabled={_currentSettings.EnableStreamingTranscription} TranscriptionModel={AppDefaults.TranscriptionModel}.");
+
         _httpClient = CreateHttpClient();
         _controller = CreateAppController();
 
@@ -69,9 +72,7 @@ public partial class App : System.Windows.Application
         var settingsViewModel = new SettingsViewModel(
             _currentSettings,
             loadedSettings.PreferredSettingsPath,
-            MicrophoneDeviceCatalog.GetAvailableDevices(),
-            AppDefaults.UploadAfterStopTranscriptionModelOptions,
-            AppDefaults.RealtimeTranscriptionModelOptions);
+            MicrophoneDeviceCatalog.GetAvailableDevices());
         InitializeWindows(settingsViewModel);
 
         _controller!.SnapshotChanged += OnSnapshotChanged;
@@ -206,14 +207,7 @@ public partial class App : System.Windows.Application
                 $"{AppIdentity.DisplayName} Settings",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
-            return;
         }
-
-        System.Windows.MessageBox.Show(
-            "Settings saved.",
-            $"{AppIdentity.DisplayName} Settings",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
     }
 
     private HotkeySetupResult ApplyHotkeySetting(string configuredHotkey)
@@ -387,7 +381,7 @@ public partial class App : System.Windows.Application
             ApiKey: string.IsNullOrWhiteSpace(_currentSettings.OpenAiApiKey)
                 ? null
                 : _currentSettings.OpenAiApiKey,
-            TranscriptionModel: _currentSettings.UploadAfterStopTranscriptionModel);
+            TranscriptionModel: AppDefaults.TranscriptionModel);
     }
 
     private OpenAiTranscriptionOptions CreateRealtimeTranscriptionOptions()
@@ -396,7 +390,9 @@ public partial class App : System.Windows.Application
             ApiKey: string.IsNullOrWhiteSpace(_currentSettings.OpenAiApiKey)
                 ? null
                 : _currentSettings.OpenAiApiKey,
-            TranscriptionModel: _currentSettings.RealtimeTranscriptionModel);
+            TranscriptionModel: AppDefaults.TranscriptionModel,
+            TranscriptionLanguage: GetTrimmedEnvironmentVariable("WHISPER_REALTIME_TRANSCRIPTION_LANGUAGE"),
+            TranscriptionPrompt: GetTrimmedEnvironmentVariable("WHISPER_REALTIME_TRANSCRIPTION_PROMPT"));
     }
 
     private static AppSettings NormalizeSettings(AppSettings settings)
@@ -404,10 +400,6 @@ public partial class App : System.Windows.Application
         return new AppSettings(
             OpenAiApiKey: settings.OpenAiApiKey.Trim(),
             SelectedMicrophoneDeviceId: settings.SelectedMicrophoneDeviceId.Trim(),
-            UploadAfterStopTranscriptionModel: AppDefaults.NormalizeUploadAfterStopTranscriptionModel(
-                settings.UploadAfterStopTranscriptionModel),
-            RealtimeTranscriptionModel: AppDefaults.NormalizeRealtimeTranscriptionModel(
-                settings.RealtimeTranscriptionModel),
             EnableStreamingTranscription: settings.EnableStreamingTranscription,
             ShowLiveTranscriptWhileStreaming:
                 settings.EnableStreamingTranscription && settings.ShowLiveTranscriptWhileStreaming,
@@ -421,6 +413,14 @@ public partial class App : System.Windows.Application
         return string.IsNullOrWhiteSpace(_currentSettings.SelectedMicrophoneDeviceId)
             ? null
             : _currentSettings.SelectedMicrophoneDeviceId;
+    }
+
+    private static string? GetTrimmedEnvironmentVariable(string variableName)
+    {
+        var value = Environment.GetEnvironmentVariable(variableName);
+        return string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Trim();
     }
 
     private string? TryApplyLaunchOnLoginSetting(AppSettings settings)

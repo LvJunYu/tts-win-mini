@@ -10,7 +10,8 @@ It lives in the system tray, lets you start or end recording with a hotkey or a 
 - Windows-only tray app
 - Start / End recording from a tray click or a global hotkey
 - Auto-copy the finished transcript to the clipboard
-- Default upload-after-stop mode, with optional realtime streaming mode for comparison
+- Default upload-after-stop mode, with optional realtime streaming mode
+- Realtime streaming is faster, but transcript quality is currently less stable than upload-after-stop mode.
 
 
 ## Download

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
@@ -57,57 +58,185 @@ public sealed class OpenAiRealtimeTranscriptionClient : IRealtimeTranscriptionCl
         OpenAiTranscriptionOptions options,
         CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            "v1/realtime/transcription_sessions");
+        var docsAttempt = await TryCreateClientSecretAsync(
+                BuildDocsAlignedSessionPayload(options),
+                options.ApiKey!,
+                cancellationToken)
+            .ConfigureAwait(false);
 
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
-        request.Content = new StringContent(
-            JsonSerializer.Serialize(
-                new
-                {
-                    input_audio_format = "pcm16",
-                    input_audio_noise_reduction = new
-                    {
-                        type = "near_field"
-                    },
-                    input_audio_transcription = new
-                    {
-                        model = options.TranscriptionModel
-                    },
-                    turn_detection = new
-                    {
-                        type = "server_vad",
-                        threshold = 0.5,
-                        prefix_padding_ms = 300,
-                        silence_duration_ms = SilenceDurationMs
-                    }
-                },
-                SerializerOptions),
-            Encoding.UTF8,
-            "application/json");
-
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var payload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        if (docsAttempt.IsSuccess)
         {
-            throw new InvalidOperationException(BuildErrorMessage(payload, response.ReasonPhrase));
+            WhisperTrace.Log(
+                "RealtimeClient",
+                $"Created realtime transcription session via docs-aligned REST payload. Rate={RealtimePcmSampleRate}Hz SilenceDurationMs={SilenceDurationMs} Language={FormatOptionalValue(options.TranscriptionLanguage)} PromptConfigured={HasConfiguredPrompt(options)}.");
+            return docsAttempt.ClientSecret!;
         }
 
-        using var document = JsonDocument.Parse(payload);
-        if (!document.RootElement.TryGetProperty("client_secret", out var clientSecret)
-            || !clientSecret.TryGetProperty("value", out var valueElement)
-            || string.IsNullOrWhiteSpace(valueElement.GetString()))
+        if (!ShouldFallbackToLegacyShape(docsAttempt.StatusCode))
         {
             throw new InvalidOperationException(
-                "OpenAI did not return a realtime transcription client secret.");
+                docsAttempt.ErrorMessage ?? "OpenAI realtime transcription request failed.");
         }
 
         WhisperTrace.Log(
             "RealtimeClient",
-            $"Created realtime transcription session via REST. Rate={RealtimePcmSampleRate} SilenceDurationMs={SilenceDurationMs}.");
-        return valueElement.GetString()!;
+            $"Docs-aligned realtime transcription session create failed ({(int)docsAttempt.StatusCode!}). Falling back to legacy request shape. Error={docsAttempt.ErrorMessage}");
+
+        var legacyAttempt = await TryCreateClientSecretAsync(
+                BuildLegacySessionPayload(options),
+                options.ApiKey!,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!legacyAttempt.IsSuccess)
+        {
+            throw new InvalidOperationException(
+                legacyAttempt.ErrorMessage
+                ?? docsAttempt.ErrorMessage
+                ?? "OpenAI realtime transcription request failed.");
+        }
+
+        WhisperTrace.Log(
+            "RealtimeClient",
+            $"Created realtime transcription session via legacy REST payload after docs-aligned fallback. Rate={RealtimePcmSampleRate}Hz SilenceDurationMs={SilenceDurationMs} Language={FormatOptionalValue(options.TranscriptionLanguage)} PromptConfigured={HasConfiguredPrompt(options)}.");
+        return legacyAttempt.ClientSecret!;
+    }
+
+    private async Task<CreateSessionAttemptResult> TryCreateClientSecretAsync(
+        object payload,
+        string apiKey,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "v1/realtime/transcription_sessions");
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload, SerializerOptions),
+            Encoding.UTF8,
+            "application/json");
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var responsePayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return new CreateSessionAttemptResult(
+                IsSuccess: false,
+                ClientSecret: null,
+                ErrorMessage: BuildErrorMessage(responsePayload, response.ReasonPhrase),
+                StatusCode: response.StatusCode);
+        }
+
+        using var document = JsonDocument.Parse(responsePayload);
+        if (!document.RootElement.TryGetProperty("client_secret", out var clientSecret)
+            || !clientSecret.TryGetProperty("value", out var valueElement)
+            || string.IsNullOrWhiteSpace(valueElement.GetString()))
+        {
+            return new CreateSessionAttemptResult(
+                IsSuccess: false,
+                ClientSecret: null,
+                ErrorMessage: "OpenAI did not return a realtime transcription client secret.",
+                StatusCode: response.StatusCode);
+        }
+
+        return new CreateSessionAttemptResult(
+            IsSuccess: true,
+            ClientSecret: valueElement.GetString(),
+            ErrorMessage: null,
+            StatusCode: response.StatusCode);
+    }
+
+    private static object BuildDocsAlignedSessionPayload(OpenAiTranscriptionOptions options)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "transcription",
+            ["audio"] = new Dictionary<string, object?>
+            {
+                ["input"] = new Dictionary<string, object?>
+                {
+                    ["format"] = new Dictionary<string, object?>
+                    {
+                        ["type"] = "audio/pcm",
+                        ["rate"] = RealtimePcmSampleRate
+                    },
+                    ["noise_reduction"] = new Dictionary<string, object?>
+                    {
+                        ["type"] = "near_field"
+                    },
+                    ["transcription"] = BuildTranscriptionConfiguration(options),
+                    ["turn_detection"] = BuildTurnDetectionConfiguration()
+                }
+            },
+            ["include"] = new[]
+            {
+                "item.input_audio_transcription.logprobs"
+            }
+        };
+    }
+
+    private static object BuildLegacySessionPayload(OpenAiTranscriptionOptions options)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["input_audio_format"] = "pcm16",
+            ["input_audio_noise_reduction"] = new Dictionary<string, object?>
+            {
+                ["type"] = "near_field"
+            },
+            ["input_audio_transcription"] = BuildTranscriptionConfiguration(options),
+            ["turn_detection"] = BuildTurnDetectionConfiguration()
+        };
+    }
+
+    private static Dictionary<string, object?> BuildTranscriptionConfiguration(OpenAiTranscriptionOptions options)
+    {
+        var configuration = new Dictionary<string, object?>
+        {
+            ["model"] = options.TranscriptionModel
+        };
+
+        if (!string.IsNullOrWhiteSpace(options.TranscriptionLanguage))
+        {
+            configuration["language"] = options.TranscriptionLanguage.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.TranscriptionPrompt))
+        {
+            configuration["prompt"] = options.TranscriptionPrompt.Trim();
+        }
+
+        return configuration;
+    }
+
+    private static Dictionary<string, object?> BuildTurnDetectionConfiguration()
+    {
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "server_vad",
+            ["threshold"] = 0.5,
+            ["prefix_padding_ms"] = 300,
+            ["silence_duration_ms"] = SilenceDurationMs
+        };
+    }
+
+    private static bool ShouldFallbackToLegacyShape(HttpStatusCode? statusCode)
+    {
+        return statusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity;
+    }
+
+    private static string FormatOptionalValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? "auto"
+            : value.Trim();
+    }
+
+    private static bool HasConfiguredPrompt(OpenAiTranscriptionOptions options)
+    {
+        return !string.IsNullOrWhiteSpace(options.TranscriptionPrompt);
     }
 
     private static string BuildErrorMessage(string payload, string? fallbackReason)
@@ -428,6 +557,7 @@ public sealed class OpenAiRealtimeTranscriptionClient : IRealtimeTranscriptionCl
 
             TryGetString(root, "transcript", out var transcript);
             transcript = transcript?.Trim() ?? string.Empty;
+            var logProbSummary = SummarizeLogProbs(root);
 
             string aggregateText;
 
@@ -452,7 +582,7 @@ public sealed class OpenAiRealtimeTranscriptionClient : IRealtimeTranscriptionCl
 
             WhisperTrace.Log(
                 "RealtimeClient",
-                $"Transcript item completed for {itemId}. CompletedCount={_completedEventCount} AggregateLength={aggregateText.Length}.");
+                $"Transcript item completed for {itemId}. CompletedCount={_completedEventCount} AggregateLength={aggregateText.Length}{logProbSummary}");
             PublishTranscriptUpdated(aggregateText);
         }
 
@@ -679,6 +809,34 @@ public sealed class OpenAiRealtimeTranscriptionClient : IRealtimeTranscriptionCl
             return "OpenAI realtime transcription request failed.";
         }
 
+        private static string SummarizeLogProbs(JsonElement root)
+        {
+            if (!root.TryGetProperty("logprobs", out var logProbs)
+                || logProbs.ValueKind != JsonValueKind.Array)
+            {
+                return string.Empty;
+            }
+
+            var tokenCount = 0;
+            var totalLogProb = 0d;
+
+            foreach (var token in logProbs.EnumerateArray())
+            {
+                if (!token.TryGetProperty("logprob", out var logProbElement)
+                    || !logProbElement.TryGetDouble(out var logProb))
+                {
+                    continue;
+                }
+
+                tokenCount++;
+                totalLogProb += logProb;
+            }
+
+            return tokenCount == 0
+                ? string.Empty
+                : $" AvgLogProb={(totalLogProb / tokenCount):F2} Tokens={tokenCount}.";
+        }
+
         private sealed class TranscriptItemState
         {
             public StringBuilder PartialTranscript { get; } = new();
@@ -687,4 +845,10 @@ public sealed class OpenAiRealtimeTranscriptionClient : IRealtimeTranscriptionCl
             public bool IsCompleted { get; set; }
         }
     }
+
+    private sealed record CreateSessionAttemptResult(
+        bool IsSuccess,
+        string? ClientSecret,
+        string? ErrorMessage,
+        HttpStatusCode? StatusCode);
 }

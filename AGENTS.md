@@ -11,7 +11,7 @@
 - Two transcription paths:
   upload-after-stop
   optional realtime streaming while recording
-- In-app settings for API key, microphone, hotkey, startup behavior, popup behavior, and per-mode model selection
+- In-app settings for API key, microphone, hotkey, startup behavior, and popup behavior
 
 ## Codebase Structure
 - `src/Stt.App`
@@ -49,19 +49,17 @@
 
 ## Current Defaults
 - Non-streaming is the default recording mode
-- Default non-streaming model: `gpt-4o-mini-transcribe`
-- Default streaming model: `gpt-4o-transcribe`
+- Transcription model: `gpt-4o-mini-transcribe`
 - Primary settings path:
   `%LocalAppData%\\whisper\\whisper.settings.json`
 
 ## Realtime Notes
-- Realtime transcription has been sensitive to audio format details.
-- Keep an eye on the `16 kHz` vs `24 kHz` question when changing the streaming path.
-- OpenAI's current realtime transcription docs describe `audio/pcm` input as `24 kHz` mono, while the transcription-session creation endpoint has still been working with the older flat request shape in this project.
-- If streaming quality regresses, verify sample rate, session payload shape, and local trace output before changing higher-level workflow logic.
-- Current status: realtime streaming can still produce random rubbish transcripts or inconsistent quality, especially on first-run or longer real mic recordings.
-- It is not clear yet whether that remaining issue is caused by the OpenAI realtime path, the chosen realtime transcription model, or this app's capture / session implementation.
-- Treat realtime mode as experimental until that behavior is understood and rechecked.
+- OpenAI realtime transcription expects `24 kHz` mono PCM audio.
+- In this app, the reliable way to produce that audio is:
+  capture the microphone at `16 kHz` mono
+  resample to `24 kHz` PCM16
+  then send the resampled audio to the realtime client
+- Do not capture the microphone directly at `24 kHz` or `48 kHz` unless you re-test transcript quality carefully. On this app, direct higher-rate capture produced worse streaming transcripts than the `16 kHz -> 24 kHz` path.
 
 ## Build
 - From the repo root:
