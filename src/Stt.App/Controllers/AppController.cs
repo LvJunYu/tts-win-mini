@@ -1,4 +1,6 @@
 using System.Threading;
+using Stt.App;
+using Stt.App.Common;
 using Stt.Core.Abstractions;
 using Stt.Core.Diagnostics;
 using Stt.Core.Models;
@@ -8,17 +10,26 @@ namespace Stt.App.Controllers;
 public sealed class AppController
 {
     private const int AutoPasteDelayMilliseconds = 75;
+    private static readonly TimeSpan LongNonStreamingConfirmationThreshold =
+        TimeSpan.FromMinutes(AppDefaults.LongNonStreamingConfirmationThresholdMinutes);
+    private static readonly TimeSpan RecordingMonitorInterval = TimeSpan.FromSeconds(5);
     private readonly IClipboardService _clipboardService;
     private readonly Func<bool> _autoPasteAfterCopyAccessor;
+    private readonly Func<TimeSpan, CancellationToken, Task<bool>> _confirmLongRecordingTranscriptionAsync;
+    private readonly Func<int> _maxStreamingLengthMinutesAccessor;
     private readonly IPasteShortcutService _pasteShortcutService;
     private readonly object _snapshotSync = new();
     private readonly IRecordingWorkflow _recordingWorkflow;
+    private readonly IRecordingWorkflowDeferredStop? _recordingWorkflowDeferredStop;
     private readonly IRecordingWorkflowModeProvider? _recordingWorkflowModeProvider;
     private readonly IRecordingWorkflowStartupNotifier? _recordingWorkflowStartupNotifier;
     private readonly Func<bool> _streamingEnabledAccessor;
     private readonly SemaphoreSlim _toggleGate = new(1, 1);
     private AppSnapshot _snapshot;
     private RecordingWorkflowMode _activeWorkflowMode = RecordingWorkflowMode.Unknown;
+    private CancellationTokenSource? _recordingMonitorCancellation;
+    private DateTimeOffset? _recordingStartedAtUtc;
+    private bool _streamingHardCapTriggered;
     private static readonly string[] NonCriticalFailureMessages =
     [
         "No audio was captured.",
@@ -31,15 +42,22 @@ public sealed class AppController
         IPasteShortcutService pasteShortcutService,
         Func<bool>? streamingEnabledAccessor = null,
         Func<bool>? autoPasteAfterCopyAccessor = null,
+        Func<int>? maxStreamingLengthMinutesAccessor = null,
+        Func<TimeSpan, CancellationToken, Task<bool>>? confirmLongRecordingTranscriptionAsync = null,
         AppSnapshot? initialSnapshot = null)
     {
         _recordingWorkflow = recordingWorkflow;
+        _recordingWorkflowDeferredStop = recordingWorkflow as IRecordingWorkflowDeferredStop;
         _recordingWorkflowModeProvider = recordingWorkflow as IRecordingWorkflowModeProvider;
         _recordingWorkflowStartupNotifier = recordingWorkflow as IRecordingWorkflowStartupNotifier;
         _clipboardService = clipboardService;
         _pasteShortcutService = pasteShortcutService;
         _streamingEnabledAccessor = streamingEnabledAccessor ?? (() => true);
         _autoPasteAfterCopyAccessor = autoPasteAfterCopyAccessor ?? (() => false);
+        _maxStreamingLengthMinutesAccessor = maxStreamingLengthMinutesAccessor
+            ?? (() => AppDefaults.DefaultMaxStreamingLengthMinutes);
+        _confirmLongRecordingTranscriptionAsync = confirmLongRecordingTranscriptionAsync
+            ?? ((_, _) => Task.FromResult(true));
         _snapshot = initialSnapshot ?? AppSnapshot.Idle;
         _recordingWorkflow.TranscriptUpdated += OnTranscriptUpdated;
         _recordingWorkflowStartupNotifier?.RecordingStarted += OnRecordingStarted;
@@ -100,9 +118,11 @@ public sealed class AppController
                 AppSessionState.Recording,
                 BuildRecordingStatusMessage(),
                 string.Empty));
+            BeginRecordingMonitoring();
         }
         catch (Exception ex)
         {
+            EndRecordingMonitoring();
             ResetActiveWorkflowMode();
             ShowFailure(ex.Message);
         }
@@ -121,13 +141,13 @@ public sealed class AppController
 
             _snapshot = new AppSnapshot(
                 AppSessionState.Recording,
-                _streamingEnabledAccessor()
-                    ? "Recording started.\n\nLive transcript will appear here."
-                    : BuildRecordingStatusMessage(),
+                BuildRecordingStatusMessage(),
                 _snapshot.TranscriptText);
 
             snapshotToPublish = _snapshot;
         }
+
+        BeginRecordingMonitoring();
 
         if (snapshotToPublish is not null)
         {
@@ -137,10 +157,19 @@ public sealed class AppController
 
     private async Task StopRecordingAsync()
     {
+        if (ShouldUseDeferredStopForCurrentMode())
+        {
+            await StopNonStreamingRecordingAsync().ConfigureAwait(false);
+            return;
+        }
+
+        var mode = CurrentWorkflowMode;
+
         SetSnapshot(new AppSnapshot(
             AppSessionState.Processing,
-            BuildProcessingStatusMessage(),
+            BuildProcessingStatusMessage(mode),
             _snapshot.TranscriptText));
+        EndRecordingMonitoring();
 
         try
         {
@@ -148,20 +177,10 @@ public sealed class AppController
                 .StopAndTranscribeAsync(CancellationToken.None)
                 .ConfigureAwait(false);
 
-            _clipboardService.CopyText(transcript.Text);
-            var autoPasteRequested = _autoPasteAfterCopyAccessor();
-            var pasteShortcutSent = false;
-
-            if (autoPasteRequested)
-            {
-                await Task.Delay(AutoPasteDelayMilliseconds).ConfigureAwait(false);
-                pasteShortcutSent = _pasteShortcutService.TrySendPasteShortcut();
-            }
-
-            SetSnapshot(new AppSnapshot(
-                AppSessionState.Ready,
-                BuildReadyStatusMessage(autoPasteRequested, pasteShortcutSent),
-                transcript.Text));
+            await PublishCompletedTranscriptAsync(
+                transcript,
+                mode,
+                allowAutoPaste: true).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -170,12 +189,75 @@ public sealed class AppController
         }
         finally
         {
+            EndRecordingMonitoring();
+            ResetActiveWorkflowMode();
+        }
+    }
+
+    private async Task StopNonStreamingRecordingAsync()
+    {
+        var mode = CurrentWorkflowMode;
+        var elapsed = GetElapsedRecordingDuration() ?? TimeSpan.Zero;
+        PendingTranscription? pendingTranscription = null;
+
+        try
+        {
+            EndRecordingMonitoring();
+            pendingTranscription = await _recordingWorkflowDeferredStop!
+                .StopForDeferredTranscriptionAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+
+            var shouldTranscribe = true;
+            if (elapsed >= LongNonStreamingConfirmationThreshold)
+            {
+                shouldTranscribe = await _confirmLongRecordingTranscriptionAsync(elapsed, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+
+            if (!shouldTranscribe)
+            {
+                await pendingTranscription.DiscardAsync(CancellationToken.None).ConfigureAwait(false);
+                SetSnapshot(new AppSnapshot(
+                    AppSessionState.Idle,
+                    $"Discarded {DurationTextFormatter.FormatReadable(elapsed)} recording. Ready to record again.",
+                    string.Empty));
+                return;
+            }
+
+            SetSnapshot(new AppSnapshot(
+                AppSessionState.Processing,
+                BuildProcessingStatusMessage(mode),
+                _snapshot.TranscriptText));
+
+            var transcript = await pendingTranscription
+                .TranscribeAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+
+            await PublishCompletedTranscriptAsync(
+                transcript,
+                mode,
+                allowAutoPaste: true).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ResetActiveWorkflowMode();
+            ShowFailure(ex.Message);
+        }
+        finally
+        {
+            if (pendingTranscription is not null)
+            {
+                await pendingTranscription.DisposeAsync().ConfigureAwait(false);
+            }
+
+            EndRecordingMonitoring();
             ResetActiveWorkflowMode();
         }
     }
 
     private void ShowFailure(string message)
     {
+        EndRecordingMonitoring();
         ResetActiveWorkflowMode();
 
         if (IsNonCriticalFailure(message))
@@ -214,10 +296,6 @@ public sealed class AppController
                 return;
             }
 
-            var statusMessage = _snapshot.State == AppSessionState.Recording
-                ? BuildRecordingStatusMessage()
-                : BuildProcessingStatusMessage();
-
             if (string.Equals(_snapshot.TranscriptText, e.Text, StringComparison.Ordinal))
             {
                 return;
@@ -225,7 +303,9 @@ public sealed class AppController
 
             _snapshot = new AppSnapshot(
                 _snapshot.State,
-                statusMessage,
+                _snapshot.State == AppSessionState.Recording
+                    ? BuildRecordingStatusMessage()
+                    : _snapshot.StatusMessage,
                 e.Text);
 
             snapshotToPublish = _snapshot;
@@ -273,13 +353,13 @@ public sealed class AppController
             _ when _streamingEnabledAccessor() =>
                 "Recording started.\n\nLive transcript will appear here.",
             _ =>
-                "Recording started.\n\nLive transcript will appear here."
+                "Recording started.\n\nYour transcript will appear here after you stop."
         };
     }
 
-    private string BuildProcessingStatusMessage()
+    private static string BuildProcessingStatusMessage(RecordingWorkflowMode mode)
     {
-        return CurrentWorkflowMode switch
+        return mode switch
         {
             RecordingWorkflowMode.RealtimeStreaming =>
                 "Wrapping up your realtime transcript.\n\nThis should only take a moment.",
@@ -292,9 +372,12 @@ public sealed class AppController
         };
     }
 
-    private string BuildReadyStatusMessage(bool autoPasteRequested, bool pasteShortcutSent)
+    private static string BuildReadyStatusMessage(
+        RecordingWorkflowMode mode,
+        bool autoPasteRequested,
+        bool pasteShortcutSent)
     {
-        var baseMessage = CurrentWorkflowMode switch
+        var baseMessage = mode switch
         {
             RecordingWorkflowMode.RealtimeStreaming =>
                 "Realtime transcript copied to clipboard.",
@@ -336,6 +419,179 @@ public sealed class AppController
         lock (_snapshotSync)
         {
             _activeWorkflowMode = RecordingWorkflowMode.Unknown;
+        }
+    }
+
+    private bool ShouldUseDeferredStopForCurrentMode()
+    {
+        var mode = CurrentWorkflowMode;
+        return _recordingWorkflowDeferredStop is not null
+            && mode is RecordingWorkflowMode.UploadAfterStop or RecordingWorkflowMode.UploadAfterStopFallback;
+    }
+
+    private void BeginRecordingMonitoring()
+    {
+        CancellationTokenSource? cancellationToDispose = null;
+        CancellationTokenSource? monitorCancellation;
+
+        lock (_snapshotSync)
+        {
+            if (_recordingStartedAtUtc is not null)
+            {
+                return;
+            }
+
+            cancellationToDispose = _recordingMonitorCancellation;
+            _recordingStartedAtUtc = DateTimeOffset.UtcNow;
+            _streamingHardCapTriggered = false;
+            _recordingMonitorCancellation = new CancellationTokenSource();
+            monitorCancellation = _recordingMonitorCancellation;
+        }
+
+        cancellationToDispose?.Cancel();
+        cancellationToDispose?.Dispose();
+
+        _ = Task.Run(() => MonitorRecordingAsync(monitorCancellation.Token));
+    }
+
+    private void EndRecordingMonitoring()
+    {
+        CancellationTokenSource? cancellationToDispose;
+
+        lock (_snapshotSync)
+        {
+            cancellationToDispose = _recordingMonitorCancellation;
+            _recordingMonitorCancellation = null;
+            _recordingStartedAtUtc = null;
+            _streamingHardCapTriggered = false;
+        }
+
+        cancellationToDispose?.Cancel();
+        cancellationToDispose?.Dispose();
+    }
+
+    private async Task MonitorRecordingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(RecordingMonitorInterval);
+
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                lock (_snapshotSync)
+                {
+                    if (_snapshot.State != AppSessionState.Recording || _recordingStartedAtUtc is null)
+                    {
+                        return;
+                    }
+
+                    if (_activeWorkflowMode != RecordingWorkflowMode.RealtimeStreaming)
+                    {
+                        continue;
+                    }
+
+                    var maxStreamingLength = TimeSpan.FromMinutes(Math.Max(1, _maxStreamingLengthMinutesAccessor()));
+                    var elapsed = DateTimeOffset.UtcNow - _recordingStartedAtUtc.Value;
+
+                    if (!_streamingHardCapTriggered && elapsed >= maxStreamingLength)
+                    {
+                        _streamingHardCapTriggered = true;
+                        _ = Task.Run(StopStreamingForHardCapAsync);
+                        return;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when recording stops or the app exits.
+        }
+    }
+
+    private async Task StopStreamingForHardCapAsync()
+    {
+        await _toggleGate.WaitAsync().ConfigureAwait(false);
+
+        try
+        {
+            TimeSpan elapsed;
+            string transcriptText;
+
+            lock (_snapshotSync)
+            {
+                if (_snapshot.State != AppSessionState.Recording)
+                {
+                    return;
+                }
+
+                elapsed = _recordingStartedAtUtc is null
+                    ? TimeSpan.FromMinutes(Math.Max(1, _maxStreamingLengthMinutesAccessor()))
+                    : DateTimeOffset.UtcNow - _recordingStartedAtUtc.Value;
+                transcriptText = _snapshot.TranscriptText;
+            }
+
+            SetSnapshot(new AppSnapshot(
+                AppSessionState.Processing,
+                $"Recording auto-stopped at {DurationTextFormatter.FormatReadable(elapsed)}.\n\nWrapping up your realtime transcript now.",
+                transcriptText));
+            EndRecordingMonitoring();
+
+            try
+            {
+                var transcript = await _recordingWorkflow
+                    .StopAndTranscribeAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                await PublishCompletedTranscriptAsync(
+                    transcript,
+                    RecordingWorkflowMode.RealtimeStreaming,
+                    allowAutoPaste: true).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                ResetActiveWorkflowMode();
+                ShowFailure(ex.Message);
+            }
+            finally
+            {
+                EndRecordingMonitoring();
+                ResetActiveWorkflowMode();
+            }
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
+    }
+
+    private async Task PublishCompletedTranscriptAsync(
+        TranscriptResult transcript,
+        RecordingWorkflowMode mode,
+        bool allowAutoPaste)
+    {
+        _clipboardService.CopyText(transcript.Text);
+        var autoPasteRequested = allowAutoPaste && _autoPasteAfterCopyAccessor();
+        var pasteShortcutSent = false;
+
+        if (autoPasteRequested)
+        {
+            await Task.Delay(AutoPasteDelayMilliseconds).ConfigureAwait(false);
+            pasteShortcutSent = _pasteShortcutService.TrySendPasteShortcut();
+        }
+
+        SetSnapshot(new AppSnapshot(
+            AppSessionState.Ready,
+            BuildReadyStatusMessage(mode, autoPasteRequested, pasteShortcutSent),
+            transcript.Text));
+    }
+
+    private TimeSpan? GetElapsedRecordingDuration()
+    {
+        lock (_snapshotSync)
+        {
+            return _recordingStartedAtUtc is null
+                ? null
+                : DateTimeOffset.UtcNow - _recordingStartedAtUtc.Value;
         }
     }
 }

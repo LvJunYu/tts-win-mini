@@ -163,11 +163,22 @@ public sealed class TrayIconHost : IDisposable
                     ToolTipIcon.Info);
                 break;
             case AppSessionState.Processing:
-                _notifyIcon.ShowBalloonTip(
-                    700,
-                    "Recording stopped",
-                    "Transcribing audio now.",
-                    ToolTipIcon.Info);
+                if (snapshot.StatusMessage.StartsWith("Recording auto-stopped", StringComparison.Ordinal))
+                {
+                    _notifyIcon.ShowBalloonTip(
+                        1200,
+                        "Recording auto-stopped",
+                        "Long realtime recording reached the safety cap and is being wrapped up now.",
+                        ToolTipIcon.Warning);
+                }
+                else
+                {
+                    _notifyIcon.ShowBalloonTip(
+                        700,
+                        "Recording stopped",
+                        "Transcribing audio now.",
+                        ToolTipIcon.Info);
+                }
                 break;
             case AppSessionState.Error:
                 _notifyIcon.ShowBalloonTip(

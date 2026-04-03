@@ -4,7 +4,7 @@ using Stt.Core.Models;
 
 namespace Stt.Infrastructure.Workflows;
 
-public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier
+public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier, IRecordingWorkflowDeferredStop
 {
     private readonly IRecordingWorkflow _nonStreamingWorkflow;
     private readonly Func<bool> _streamingEnabledAccessor;
@@ -84,6 +84,34 @@ public sealed class SelectableRecordingWorkflow : IRecordingWorkflow, IRecording
         try
         {
             return await activeWorkflow.StopAndTranscribeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_syncRoot)
+            {
+                _activeWorkflow = null;
+            }
+        }
+    }
+
+    public async Task<PendingTranscription> StopForDeferredTranscriptionAsync(CancellationToken cancellationToken)
+    {
+        IRecordingWorkflow activeWorkflow;
+
+        lock (_syncRoot)
+        {
+            activeWorkflow = _activeWorkflow
+                ?? throw new InvalidOperationException("No active recording session was found.");
+        }
+
+        if (activeWorkflow is not IRecordingWorkflowDeferredStop deferredStop)
+        {
+            throw new InvalidOperationException("Deferred stop is unavailable for the current recording workflow.");
+        }
+
+        try
+        {
+            return await deferredStop.StopForDeferredTranscriptionAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

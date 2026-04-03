@@ -14,6 +14,7 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _autoPasteAfterCopy;
     private bool _enableStreamingTranscription;
     private bool _launchOnWindowsLogin;
+    private string _maxStreamingLengthMinutesText;
     private string _openAiApiKey;
     private string _realtimeSilenceDurationMsText;
     private RealtimeVadEagerness _selectedRealtimeVadEagerness;
@@ -33,6 +34,7 @@ public sealed class SettingsViewModel : ObservableObject
         _openAiApiKey = settings.OpenAiApiKey;
         _selectedMicrophoneDeviceId = settings.SelectedMicrophoneDeviceId;
         _enableStreamingTranscription = settings.EnableStreamingTranscription;
+        _maxStreamingLengthMinutesText = settings.MaxStreamingLengthMinutes.ToString();
         _toggleRecordingHotkey = settings.ToggleRecordingHotkey;
         _showTranscriptWindowWhenSpeaking = settings.ShowTranscriptWindowWhenSpeaking;
         _autoPasteAfterCopy = settings.AutoPasteAfterCopy;
@@ -65,6 +67,12 @@ public sealed class SettingsViewModel : ObservableObject
     {
         get => _enableStreamingTranscription;
         set => SetProperty(ref _enableStreamingTranscription, value);
+    }
+
+    public string MaxStreamingLengthMinutesText
+    {
+        get => _maxStreamingLengthMinutesText;
+        set => SetProperty(ref _maxStreamingLengthMinutesText, value);
     }
 
     public IReadOnlyList<MicrophoneDeviceOption> AvailableMicrophones
@@ -154,6 +162,7 @@ public sealed class SettingsViewModel : ObservableObject
             ? settings.SelectedMicrophoneDeviceId
             : AvailableMicrophones.FirstOrDefault()?.DeviceId ?? string.Empty;
         EnableStreamingTranscription = settings.EnableStreamingTranscription;
+        MaxStreamingLengthMinutesText = settings.MaxStreamingLengthMinutes.ToString();
         ToggleRecordingHotkey = settings.ToggleRecordingHotkey;
         ShowTranscriptWindowWhenSpeaking = settings.ShowTranscriptWindowWhenSpeaking;
         AutoPasteAfterCopy = settings.AutoPasteAfterCopy;
@@ -165,6 +174,14 @@ public sealed class SettingsViewModel : ObservableObject
 
     private void RequestSave()
     {
+        if (!TryParsePositiveInt(MaxStreamingLengthMinutesText, out var maxStreamingLengthMinutes))
+        {
+            ValidationFailed?.Invoke(
+                this,
+                "Max streaming length must be a whole number greater than zero.");
+            return;
+        }
+
         var realtimeSilenceDurationMs = AppDefaults.DefaultRealtimeSilenceDurationMs;
         if (IsServerVadSelected
             && !TryParseNonNegativeInt(
@@ -187,6 +204,7 @@ public sealed class SettingsViewModel : ObservableObject
             OpenAiApiKey: OpenAiApiKey.Trim(),
             SelectedMicrophoneDeviceId: SelectedMicrophoneDeviceId.Trim(),
             EnableStreamingTranscription: EnableStreamingTranscription,
+            MaxStreamingLengthMinutes: maxStreamingLengthMinutes,
             ToggleRecordingHotkey: ToggleRecordingHotkey.Trim(),
             ShowTranscriptWindowWhenSpeaking: ShowTranscriptWindowWhenSpeaking,
             AutoPasteAfterCopy: AutoPasteAfterCopy,
@@ -204,6 +222,11 @@ public sealed class SettingsViewModel : ObservableObject
     private static bool TryParseNonNegativeInt(string value, out int result)
     {
         return int.TryParse(value.Trim(), out result) && result >= 0;
+    }
+
+    private static bool TryParsePositiveInt(string value, out int result)
+    {
+        return int.TryParse(value.Trim(), out result) && result > 0;
     }
 
     private static IReadOnlyList<SettingOption<RealtimeVadMode>> CreateRealtimeVadModeOptions()

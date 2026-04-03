@@ -9,8 +9,8 @@
 - Tray-first UI with global hotkey support
 - Manual start / end recording
 - Two transcription paths:
-  default realtime streaming while recording
-  upload-after-stop fallback
+  default upload-after-stop recording
+  optional realtime streaming while recording
 - In-app settings for API key, microphone, hotkey, startup behavior, and popup behavior
 
 ## Codebase Structure
@@ -48,7 +48,7 @@
   runtime switch between streaming and non-streaming paths
 
 ## Current Defaults
-- Streaming is the default recording mode
+- Upload-after-stop is the default recording mode
 - Transcription model: `gpt-4o-mini-transcribe`
 - Realtime VAD defaults: `semantic_vad` with `low` eagerness
 - Server VAD fallback defaults: `silence_duration_ms = 900`, `prefix_padding_ms = 300`

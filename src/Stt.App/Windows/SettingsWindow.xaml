@@ -206,6 +206,17 @@
                                               BorderBrush="#CCD7C5"
                                               Foreground="#162018" />
                                 </StackPanel>
+
+                                <TextBlock Margin="0,12,0,0"
+                                           Text="Max streaming length (minutes)"
+                                           Foreground="#33453A"
+                                           FontWeight="SemiBold" />
+                                <TextBox Margin="0,8,0,0"
+                                         Padding="12,10"
+                                         Text="{Binding MaxStreamingLengthMinutesText, UpdateSourceTrigger=PropertyChanged}"
+                                         Background="#FFFDF7"
+                                         BorderBrush="#CCD7C5"
+                                         Foreground="#162018" />
                             </StackPanel>
                         </Border>
 

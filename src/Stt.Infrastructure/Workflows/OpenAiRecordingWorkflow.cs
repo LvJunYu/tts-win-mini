@@ -4,7 +4,7 @@ using Stt.Core.Models;
 
 namespace Stt.Infrastructure.Workflows;
 
-public sealed class OpenAiRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider
+public sealed class OpenAiRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowDeferredStop
 {
     private readonly IAudioCaptureSession _audioCaptureSession;
     private readonly ITranscriptionClient _transcriptionClient;
@@ -49,6 +49,12 @@ public sealed class OpenAiRecordingWorkflow : IRecordingWorkflow, IRecordingWork
 
     public async Task<TranscriptResult> StopAndTranscribeAsync(CancellationToken cancellationToken)
     {
+        await using var pendingTranscription = await StopForDeferredTranscriptionAsync(cancellationToken).ConfigureAwait(false);
+        return await pendingTranscription.TranscribeAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<PendingTranscription> StopForDeferredTranscriptionAsync(CancellationToken cancellationToken)
+    {
         lock (_syncRoot)
         {
             if (!_isRecording)
@@ -62,9 +68,29 @@ public sealed class OpenAiRecordingWorkflow : IRecordingWorkflow, IRecordingWork
         try
         {
             audioFile = await _audioCaptureSession.StopAsync(cancellationToken).ConfigureAwait(false);
-            var result = await _transcriptionClient.TranscribeAsync(audioFile, cancellationToken).ConfigureAwait(false);
-            WhisperTrace.Log("BatchWorkflow", $"Upload-after-stop transcription completed. Length={result.Text.Length}.");
-            return result;
+            var capturedAudioFile = audioFile;
+            audioFile = null;
+
+            return new PendingTranscription(
+                async token =>
+                {
+                    try
+                    {
+                        var result = await _transcriptionClient.TranscribeAsync(capturedAudioFile, token).ConfigureAwait(false);
+                        WhisperTrace.Log("BatchWorkflow", $"Upload-after-stop transcription completed. Length={result.Text.Length}.");
+                        return result;
+                    }
+                    finally
+                    {
+                        capturedAudioFile.Dispose();
+                    }
+                },
+                _ =>
+                {
+                    WhisperTrace.Log("BatchWorkflow", "Upload-after-stop recording discarded before transcription.");
+                    capturedAudioFile.Dispose();
+                    return Task.CompletedTask;
+                });
         }
         finally
         {

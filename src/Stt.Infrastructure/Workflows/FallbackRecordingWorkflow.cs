@@ -4,7 +4,7 @@ using Stt.Core.Models;
 
 namespace Stt.Infrastructure.Workflows;
 
-public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier
+public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWorkflowModeProvider, IRecordingWorkflowStartupNotifier, IRecordingWorkflowDeferredStop
 {
     private readonly IRecordingWorkflow _fallbackWorkflow;
     private readonly IRecordingWorkflow _primaryWorkflow;
@@ -110,6 +110,35 @@ public sealed class FallbackRecordingWorkflow : IRecordingWorkflow, IRecordingWo
         try
         {
             return await activeWorkflow.StopAndTranscribeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_syncRoot)
+            {
+                _activeWorkflow = null;
+                _activeMode = RecordingWorkflowMode.Unknown;
+            }
+        }
+    }
+
+    public async Task<PendingTranscription> StopForDeferredTranscriptionAsync(CancellationToken cancellationToken)
+    {
+        IRecordingWorkflow activeWorkflow;
+
+        lock (_syncRoot)
+        {
+            activeWorkflow = _activeWorkflow
+                ?? throw new InvalidOperationException("No active recording session was found.");
+        }
+
+        if (activeWorkflow is not IRecordingWorkflowDeferredStop deferredStop)
+        {
+            throw new InvalidOperationException("Deferred stop is unavailable for the current recording workflow.");
+        }
+
+        try
+        {
+            return await deferredStop.StopForDeferredTranscriptionAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

@@ -9,6 +9,7 @@ public sealed record AppSettings(
     string OpenAiApiKey,
     string SelectedMicrophoneDeviceId,
     bool EnableStreamingTranscription,
+    int MaxStreamingLengthMinutes,
     string ToggleRecordingHotkey,
     bool ShowTranscriptWindowWhenSpeaking,
     bool AutoPasteAfterCopy,
@@ -67,7 +68,11 @@ public static class AppSettingsLoader
             EnableStreamingTranscription: FirstNonNull(
                     payload?.EnableStreamingTranscription,
                     ParseBoolean(Environment.GetEnvironmentVariable("WHISPER_ENABLE_STREAMING_TRANSCRIPTION")))
-                ?? true,
+                ?? AppDefaults.DefaultEnableStreamingTranscription,
+            MaxStreamingLengthMinutes: FirstNonNull(
+                    payload?.MaxStreamingLengthMinutes,
+                    ParsePositiveInteger(Environment.GetEnvironmentVariable("WHISPER_MAX_STREAMING_LENGTH_MINUTES")))
+                ?? AppDefaults.DefaultMaxStreamingLengthMinutes,
             ToggleRecordingHotkey: FirstNonEmpty(
                     payload?.ToggleRecordingHotkey,
                     Environment.GetEnvironmentVariable("WHISPER_TOGGLE_RECORDING_HOTKEY"))
@@ -121,6 +126,7 @@ public static class AppSettingsLoader
             OpenAiApiKey = settings.OpenAiApiKey,
             SelectedMicrophoneDeviceId = settings.SelectedMicrophoneDeviceId,
             EnableStreamingTranscription = settings.EnableStreamingTranscription,
+            MaxStreamingLengthMinutes = settings.MaxStreamingLengthMinutes,
             ToggleRecordingHotkey = settings.ToggleRecordingHotkey,
             ShowTranscriptWindowWhenSpeaking = settings.ShowTranscriptWindowWhenSpeaking,
             AutoPasteAfterCopy = settings.AutoPasteAfterCopy,
@@ -217,6 +223,16 @@ public static class AppSettingsLoader
         return null;
     }
 
+    private static int? ParsePositiveInteger(string? value)
+    {
+        if (int.TryParse(value, out var parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
     private static RealtimeVadMode? ParseRealtimeVadMode(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -274,6 +290,7 @@ public static class AppSettingsLoader
         public string? OpenAiApiKey { get; init; }
         public string? SelectedMicrophoneDeviceId { get; init; }
         public bool? EnableStreamingTranscription { get; init; }
+        public int? MaxStreamingLengthMinutes { get; init; }
         public string? ToggleRecordingHotkey { get; init; }
         public bool? ShowTranscriptWindowWhenSpeaking { get; init; }
         public bool? AutoPasteAfterCopy { get; init; }

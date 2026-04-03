@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Windows;
+using Stt.App.Common;
 using Stt.App.Configuration;
 using Stt.App.Controllers;
 using Stt.App.Services;
@@ -15,10 +16,12 @@ namespace Stt.App;
 
 public partial class App : System.Windows.Application
 {
+    private AppSnapshot _currentSnapshot = AppSnapshot.Idle;
     private AppSettings _currentSettings = new(
         OpenAiApiKey: string.Empty,
         SelectedMicrophoneDeviceId: string.Empty,
-        EnableStreamingTranscription: true,
+        EnableStreamingTranscription: AppDefaults.DefaultEnableStreamingTranscription,
+        MaxStreamingLengthMinutes: AppDefaults.DefaultMaxStreamingLengthMinutes,
         ToggleRecordingHotkey: "Ctrl+Alt+Space",
         ShowTranscriptWindowWhenSpeaking: false,
         AutoPasteAfterCopy: false,
@@ -72,17 +75,9 @@ public partial class App : System.Windows.Application
             hotkeySetup.ErrorMessage,
             hotkeySetup.DisplayText,
             launchOnLoginError);
-
-        var settingsViewModel = new SettingsViewModel(
-            _currentSettings,
-            loadedSettings.PreferredSettingsPath,
-            MicrophoneDeviceCatalog.GetAvailableDevices());
-        InitializeWindows(settingsViewModel);
+        _currentSnapshot = initialSnapshot;
 
         _controller!.SnapshotChanged += OnSnapshotChanged;
-        settingsViewModel.SaveRequested += OnSettingsSaveRequested;
-
-        _viewModel!.ApplySnapshot(initialSnapshot);
 
         _trayIconHost = CreateTrayIconHost(hotkeySetup);
 
@@ -119,6 +114,7 @@ public partial class App : System.Windows.Application
         {
             var previousState = _lastSnapshotState;
             _lastSnapshotState = snapshot.State;
+            _currentSnapshot = snapshot;
 
             _viewModel?.ApplySnapshot(snapshot);
             _trayIconHost?.ApplySnapshot(snapshot);
@@ -140,19 +136,17 @@ public partial class App : System.Windows.Application
 
     private void ShowTranscriptWindow(bool activate = true)
     {
-        ShowManagedWindow(_transcriptWindow, activate);
+        var transcriptWindow = EnsureTranscriptWindowInitialized();
+        ShowManagedWindow(transcriptWindow, activate);
     }
 
     private void ShowSettingsWindow()
     {
-        if (_settingsWindow is null || _settingsViewModel is null)
-        {
-            return;
-        }
+        var (settingsViewModel, settingsWindow) = EnsureSettingsWindowInitialized();
 
-        _settingsViewModel.SetAvailableMicrophones(MicrophoneDeviceCatalog.GetAvailableDevices());
-        _settingsViewModel.ApplySettings(_currentSettings);
-        ShowManagedWindow(_settingsWindow);
+        settingsViewModel.SetAvailableMicrophones(MicrophoneDeviceCatalog.GetAvailableDevices());
+        settingsViewModel.ApplySettings(_currentSettings);
+        ShowManagedWindow(settingsWindow);
     }
 
     private void OnSettingsSaveRequested(object? sender, AppSettingsSaveRequestedEventArgs e)
@@ -348,22 +342,39 @@ public partial class App : System.Windows.Application
             new WpfClipboardService(),
             new WindowsPasteShortcutService(),
             () => _currentSettings.EnableStreamingTranscription,
-            () => _currentSettings.AutoPasteAfterCopy);
+            () => _currentSettings.AutoPasteAfterCopy,
+            () => _currentSettings.MaxStreamingLengthMinutes,
+            ConfirmLongRecordingTranscriptionAsync);
     }
 
-    private void InitializeWindows(SettingsViewModel settingsViewModel)
+    private TranscriptWindow EnsureTranscriptWindowInitialized()
     {
-        _viewModel = new TranscriptPopupViewModel();
-        _transcriptWindow = new TranscriptWindow
+        _viewModel ??= new TranscriptPopupViewModel();
+        _viewModel.ApplySnapshot(_currentSnapshot);
+
+        return _transcriptWindow ??= new TranscriptWindow
         {
             DataContext = _viewModel
         };
+    }
 
-        _settingsViewModel = settingsViewModel;
-        _settingsWindow = new SettingsWindow
+    private (SettingsViewModel ViewModel, SettingsWindow Window) EnsureSettingsWindowInitialized()
+    {
+        if (_settingsViewModel is null)
+        {
+            _settingsViewModel = new SettingsViewModel(
+                _currentSettings,
+                _settingsPath ?? string.Empty,
+                MicrophoneDeviceCatalog.GetAvailableDevices());
+            _settingsViewModel.SaveRequested += OnSettingsSaveRequested;
+        }
+
+        _settingsWindow ??= new SettingsWindow
         {
             DataContext = _settingsViewModel
         };
+
+        return (_settingsViewModel, _settingsWindow);
     }
 
     private TrayIconHost CreateTrayIconHost(HotkeySetupResult hotkeySetup)
@@ -407,6 +418,7 @@ public partial class App : System.Windows.Application
             OpenAiApiKey: settings.OpenAiApiKey.Trim(),
             SelectedMicrophoneDeviceId: settings.SelectedMicrophoneDeviceId.Trim(),
             EnableStreamingTranscription: settings.EnableStreamingTranscription,
+            MaxStreamingLengthMinutes: Math.Max(1, settings.MaxStreamingLengthMinutes),
             ToggleRecordingHotkey: settings.ToggleRecordingHotkey.Trim(),
             ShowTranscriptWindowWhenSpeaking: settings.ShowTranscriptWindowWhenSpeaking,
             AutoPasteAfterCopy: settings.AutoPasteAfterCopy,
@@ -487,6 +499,32 @@ public partial class App : System.Windows.Application
     {
         window.Topmost = true;
         window.Topmost = false;
+    }
+
+    private Task<bool> ConfirmLongRecordingTranscriptionAsync(
+        TimeSpan duration,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return Dispatcher.InvokeAsync(() =>
+        {
+            var message = $"""
+This recording is {DurationTextFormatter.FormatReadable(duration)} long.
+
+Yes: transcribe it now.
+No: discard it without sending anything.
+""";
+
+            var result = System.Windows.MessageBox.Show(
+                message,
+                $"{AppIdentity.DisplayName} Long Recording",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+
+            return result == MessageBoxResult.Yes;
+        }).Task;
     }
 
     private sealed record HotkeySetupResult(
